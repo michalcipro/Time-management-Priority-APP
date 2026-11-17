@@ -6,7 +6,8 @@ import { Fragment } from "react";
  */
 function inline(text: string, keyPrefix: string) {
   const parts: React.ReactNode[] = [];
-  const re = /(\*\*[^*]+\*\*|_[^_]+_|`[^`]+`)/g;
+  // **bold**, `code`, *italic* or _italic_ (underscores only at word boundaries, so IDENT_NAMES stay intact)
+  const re = /(\*\*[^*]+\*\*|`[^`]+`|(?<![\w*])\*[^*\s][^*]*\*(?![\w*])|(?<!\w)_[^_\s][^_]*_(?!\w))/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let i = 0;

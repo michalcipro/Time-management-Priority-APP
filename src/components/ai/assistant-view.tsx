@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "motion/react";
-import { ArrowUp, Bot, CalendarDays, Eraser, Lightbulb, MessageSquareReply, RefreshCw, ShieldAlert, Sparkles, Target, UserPlus, Users } from "lucide-react";
+import { ArrowUp, Bot, CalendarDays, Eraser, Lightbulb, MessageSquareReply, RefreshCw, ShieldAlert, Sparkles, Target, UserPlus, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -13,7 +13,7 @@ import { PriorityBadge } from "@/components/priority/priority";
 import { StatsCards } from "@/components/board/stats-cards";
 import { useAppUI } from "@/components/layout/app-ui";
 import { useSessionUser } from "@/components/layout/session-context";
-import { keys, useAssistantMessages, useBriefing, useBoard } from "@/hooks/queries";
+import { keys, useAssistantMessages, useBriefing, useBoard, useMessage, useTask } from "@/hooks/queries";
 import { api, errorMessage } from "@/lib/api-client";
 import { formatLongDate, formatTime, timeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -39,7 +39,13 @@ function PromptChips({ onPick, director }: { onPick: (p: string) => void; direct
   );
 }
 
-function Chat() {
+interface ChatContext {
+  taskId?: string;
+  messageId?: string;
+  label: string;
+}
+
+function Chat({ context, onClearContext }: { context: ChatContext | null; onClearContext: () => void }) {
   const user = useSessionUser();
   const qc = useQueryClient();
   const history = useAssistantMessages();
@@ -65,7 +71,7 @@ function Chat() {
     const now = new Date().toISOString();
     setMessages((m) => [...m, { id: `u-${now}`, role: "USER", content, createdAt: now }, { id: `a-${now}`, role: "ASSISTANT", content: "", createdAt: now }]);
     try {
-      const res = await fetch("/api/ai/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: content }) });
+      const res = await fetch("/api/ai/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: content, context: context ? { taskId: context.taskId, messageId: context.messageId } : undefined }) });
       if (!res.ok || !res.body) {
         const err = await res.json().catch(() => null);
         throw new Error(err?.error?.message ?? "Asistent je nedostupný.");
@@ -153,6 +159,17 @@ function Chat() {
         )}
       </div>
       <div className="space-y-2.5 border-t border-border p-3">
+        {context && (
+          <div className="flex items-center gap-2 rounded-lg border border-ai-border bg-ai-soft px-3 py-1.5 text-xs">
+            <Sparkles className="size-3.5 shrink-0 text-ai" />
+            <span className="min-w-0 flex-1 truncate">
+              Ptáte se k: <span className="font-semibold">{context.label}</span>
+            </span>
+            <button onClick={onClearContext} className="rounded p-0.5 text-muted-foreground hover:bg-card" aria-label="Zrušit kontext">
+              <X className="size-3.5" />
+            </button>
+          </div>
+        )}
         <PromptChips onPick={(p) => void send(p)} director={user.role === "DIRECTOR"} />
         <form
           onSubmit={(e) => {
@@ -312,6 +329,18 @@ function Suggestions({ briefing }: { briefing: BriefingDTO | null | undefined })
 
 export function AssistantView() {
   const qc = useQueryClient();
+  const router = useRouter();
+  const pathname = usePathname();
+  const params = useSearchParams();
+  const aboutTask = params.get("aboutTask");
+  const aboutMessage = params.get("aboutMessage");
+  const task = useTask(aboutTask);
+  const message = useMessage(aboutMessage);
+  const chatContext: ChatContext | null = aboutTask
+    ? { taskId: aboutTask, label: task.data?.title ?? "úkol" }
+    : aboutMessage
+      ? { messageId: aboutMessage, label: message.data ? `zpráva od ${message.data.senderName ?? message.data.senderContact}` : "zpráva" }
+      : null;
   const briefing = useBriefing();
   const board = useBoard();
   const regenerate = useMutation({
@@ -369,7 +398,7 @@ export function AssistantView() {
       <StatsCards stats={board.data?.stats ?? b?.stats} loading={board.isLoading && !b} keys={["critical", "escalated", "waitingMessages"]} />
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
-        <Chat />
+        <Chat context={chatContext} onClearContext={() => router.replace(pathname)} />
         <Suggestions briefing={b} />
       </div>
     </div>

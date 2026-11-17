@@ -411,6 +411,11 @@ function TaskBody({ task, onClose }: { task: TaskDetail; onClose: () => void }) 
             Označit jako hotové
           </Button>
         )}
+        <Button size="sm" variant="outline" asChild>
+          <Link href={`/assistant?aboutTask=${task.id}`} onClick={onClose}>
+            <Sparkles className="text-ai" /> Zeptat se AI
+          </Link>
+        </Button>
         {task.deadline && (
           <Button size="sm" variant="outline" onClick={() => downloadIcs(task)}>
             <CalendarPlus /> Do kalendáře

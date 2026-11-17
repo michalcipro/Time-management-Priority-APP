@@ -171,7 +171,7 @@ RBAC je vynucený **ve třech vrstvách**:
 * **Automaticky u každé zprávy**: shrnutí (1–2 věty), záměr, klíčová témata, sentiment, navržená priorita s odůvodněním, termíny, navazující úkoly s návrhem vhodného poradce, 1–3 varianty odpovědi.
 * **Ranní briefing** pro ředitele (v nastavenou hodinu, e-mailem/push dle preferencí): na co se dnes zaměřit, rizika, vytížení týmu, návrhy přiřazení a odpovědí.
 * **Proaktivní upozornění** na čekající zprávy a eskalace.
-* **Chat s asistentem** nad aktuálními daty uživatele (jen v rozsahu jeho oprávnění).
+* **Chat s asistentem** nad aktuálními daty uživatele (jen v rozsahu jeho oprávnění) – obecně, nebo ke konkrétnímu úkolu či zprávě tlačítkem **„Zeptat se AI“**.
 * **„Upravit s AI“** v editoru odpovědi (formálněji, stručněji, zdvořile odmítnout…).
 * Výstupy se ukládají do DB, lze je **regenerovat**; každé volání je v `AILog` (tokeny, cena, latence) → přehled nákladů v *Nastavení → AI a náklady*.
 * **AI nikdy nic neodesílá samo.**

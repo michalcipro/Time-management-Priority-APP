@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { dayKey, deadlineInfo, formatTime, addDays } from "@/lib/format";
 import { priorityMeta } from "@/lib/priority";
 import { normalizeForSearch } from "@/lib/search-text";
+import { MESSAGE_STATUS_LABELS, TASK_STATUS_LABELS } from "@/lib/labels";
 import type { AssistantMessageDTO, BoardData, TeamOverview } from "@/lib/dto";
 import { withActor } from "../db";
 import type { SessionUser } from "../session";
@@ -64,7 +65,7 @@ async function loadSnapshot(user: SessionUser, context?: { taskId?: string; mess
             description: t.description,
             client: t.clientName,
             priority: priorityMeta(t.priority).code,
-            status: t.status,
+            status: TASK_STATUS_LABELS[t.status],
             deadline: t.deadline ? deadlineInfo(t.deadline, now).label : null,
             assignees: t.assignees.map((a) => a.user.name),
             comments: t.comments.map((c) => `${c.author.name}: ${c.body}`),
@@ -82,7 +83,7 @@ async function loadSnapshot(user: SessionUser, context?: { taskId?: string; mess
             subject: m.subject,
             received: describeNow(m.receivedAt),
             priority: priorityMeta(m.priority).code,
-            status: m.status,
+            status: MESSAGE_STATUS_LABELS[m.status],
             summary: m.aiSummary,
             content: m.content.slice(0, 6000),
           },
@@ -125,6 +126,45 @@ export function offlineAnswer(question: string, snap: ChatSnapshot, now: Date): 
   const fmt = (i: (typeof items)[number]) =>
     `- **${priorityMeta(i.priority).code}** ${i.title}${i.deadline ? ` · ${deadlineInfo(i.deadline, now).label}` : ""}${i.people.length ? ` · ${i.people.map((p) => p.name).join(", ")}` : ""}`;
 
+  if (snap.context) {
+    try {
+      const ctx = JSON.parse(snap.context) as {
+        task?: { title: string; client?: string | null; priority: string; status: string; deadline?: string | null; assignees: string[]; comments: string[]; description?: string | null; sourceMessage?: { summary?: string | null } | null };
+        message?: { from: string; priority: string; status: string; summary?: string | null; subject?: string | null };
+      };
+      if (ctx.task) {
+        const t = ctx.task;
+        return [
+          `**${t.title}**${t.client ? ` (klient ${t.client})` : ""}`,
+          `- Priorita **${t.priority}**, stav ${t.status}${t.deadline ? `, termín ${t.deadline}` : ""}`,
+          `- Řeší: ${t.assignees.join(", ") || "nikdo"}`,
+          t.description ? `- Zadání: ${t.description}` : null,
+          t.sourceMessage?.summary ? `- Zpráva klienta: ${t.sourceMessage.summary}` : null,
+          t.comments.length ? `- Poslední komentář: ${t.comments[t.comments.length - 1]}` : null,
+          "",
+          "Doporučený další krok: domluvte s řešitelem konkrétní termín dalšího kontaktu s klientem a výsledek zapište do komentáře.",
+          "(Offline režim AI – pro podrobnou analýzu nastavte `ANTHROPIC_API_KEY`.)",
+        ]
+          .filter((l) => l !== null)
+          .join("\n");
+      }
+      if (ctx.message) {
+        const m = ctx.message;
+        return [
+          `**Zpráva od ${m.from}**${m.subject ? ` – ${m.subject}` : ""}`,
+          `- Priorita **${m.priority}**, stav ${m.status}`,
+          m.summary ? `- Shrnutí: ${m.summary}` : null,
+          "",
+          "Návrhy odpovědí najdete přímo v detailu zprávy v Inboxu.",
+          "(Offline režim AI – pro podrobnou analýzu nastavte `ANTHROPIC_API_KEY`.)",
+        ]
+          .filter((l) => l !== null)
+          .join("\n");
+      }
+    } catch {
+      /* fall through to generic answers */
+    }
+  }
   if (/kalendar|schuzk|program|dnes mam/.test(q)) {
     if (snap.events.length === 0) return "V příštích 48 hodinách nemáte v kalendáři žádné události.";
     return "V příštích 48 hodinách máte:\n" + snap.events.map((e) => `- ${dayKey(e.start) === dayKey(now) ? "Dnes" : "Zítra"} ${formatTime(e.start)} – ${e.title}${e.location ? ` (${e.location})` : ""}`).join("\n");
@@ -142,7 +182,7 @@ export function offlineAnswer(question: string, snap: ChatSnapshot, now: Date): 
   }
   const top = items.slice(0, 5);
   if (top.length === 0) return "Nemáte žádné otevřené úkoly ani čekající zprávy. Skvělá práce!";
-  return `Doporučuji začít v tomto pořadí:\n${top.map(fmt).join("\n")}\n\n_(Offline režim AI – pro plnohodnotné odpovědi nastavte ANTHROPIC_API_KEY.)_`;
+  return `Doporučuji začít v tomto pořadí:\n${top.map(fmt).join("\n")}\n\n(Offline režim AI – pro plnohodnotné odpovědi nastavte \`ANTHROPIC_API_KEY\`.)`;
 }
 
 /**
@@ -213,7 +253,7 @@ export async function streamChat(
         });
         const final = await stream.finalMessage();
         if (final.stop_reason === "refusal") {
-          const note = "\n\n_Model tuto žádost odmítl zpracovat._";
+          const note = "\n\n*Model tuto žádost odmítl zpracovat.*";
           text += note;
           controller.enqueue(encoder.encode(note));
         }

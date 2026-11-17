@@ -41,6 +41,8 @@ services:
       DATABASE_URL: postgresql://priority_app:priority_app@postgres:5432/priority_agent
       DIRECT_URL: postgresql://postgres:postgres@postgres:5432/priority_agent
       REDIS_URL: redis://redis:6379
+      JOB_RUNNER: queue
+      RUN_MIGRATIONS: "true"
     ports:
       - "3000:3000"
     depends_on:
@@ -58,6 +60,7 @@ services:
       DATABASE_URL: postgresql://priority_app:priority_app@postgres:5432/priority_agent
       DIRECT_URL: postgresql://postgres:postgres@postgres:5432/priority_agent
       REDIS_URL: redis://redis:6379
+      JOB_RUNNER: queue
     depends_on:
       postgres:
         condition: service_healthy

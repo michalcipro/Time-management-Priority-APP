@@ -191,6 +191,11 @@ function Body({ message, onBack }: { message: MessageDetailDTO; onBack?: () => v
               <UserPlus /> Přiřadit úkol
             </Button>
           )}
+          <Button size="sm" variant="ghost" asChild>
+            <Link href={`/assistant?aboutMessage=${message.id}`}>
+              <Sparkles className="text-ai" /> Zeptat se AI
+            </Link>
+          </Button>
           {!resolved ? (
             <Button size="sm" variant="outline" onClick={() => update.mutate({ id: message.id, status: "RESOLVED" }, { onSuccess: () => toast.success("Zpráva vyřízena") })}>
               <CheckCircle2 /> Vyřízeno

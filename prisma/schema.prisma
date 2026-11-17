@@ -1,0 +1,528 @@
+// Priority Agent – data model
+//
+// Conventions
+// - Every business row carries `teamId` (tenant isolation, enforced by RLS policies, see
+//   prisma/migrations/*_rls/migration.sql).
+// - Priorities are stored as Int 1..5 (1 = P1 Critical, 5 = P5 Later/Info) so that
+//   "more urgent" == "smaller number" and escalation math stays trivial.
+// - `basePriority` is the priority chosen by a human or the AI; `priority` is the
+//   effective (possibly auto-escalated) value shown in the UI.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  DIRECTOR
+  ADVISOR
+  ADMIN
+}
+
+enum Channel {
+  EMAIL
+  WHATSAPP
+  SMS
+  IMESSAGE
+  INTERNAL
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageStatus {
+  UNREAD
+  WAITING_REPLY
+  ASSIGNED
+  RESOLVED
+}
+
+enum AIProcessingStatus {
+  PENDING
+  PROCESSING
+  DONE
+  FAILED
+  SKIPPED
+}
+
+enum TaskStatus {
+  NEW
+  IN_PROGRESS
+  WAITING
+  DONE
+}
+
+enum PriorityChangeSource {
+  AUTO
+  MANUAL
+  AI
+  SYSTEM
+}
+
+enum IntegrationType {
+  GOOGLE
+  MICROSOFT
+  WHATSAPP
+  SMS
+}
+
+enum IntegrationStatus {
+  ACTIVE
+  PENDING
+  ERROR
+  DISCONNECTED
+}
+
+enum NotificationType {
+  TASK_ASSIGNED
+  TASK_STATUS
+  TASK_COMMENT
+  TASK_OVERDUE
+  DEADLINE_SOON
+  PRIORITY_ESCALATED
+  MESSAGE_WAITING
+  MESSAGE_URGENT
+  MESSAGE_ASSIGNED
+  ESCALATED_TO_DIRECTOR
+  BRIEFING_READY
+  SYSTEM
+}
+
+enum AIJobKind {
+  MESSAGE_ANALYSIS
+  BRIEFING
+  CHAT
+  REPLY_DRAFT
+}
+
+enum AILogStatus {
+  SUCCESS
+  FALLBACK
+  ERROR
+}
+
+enum CalendarProvider {
+  LOCAL
+  GOOGLE
+  MICROSOFT
+}
+
+enum ChatRole {
+  USER
+  ASSISTANT
+}
+
+// ─── Organisation ─────────────────────────────────────────────────────────────
+
+model Team {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  /// Validated by src/lib/settings.ts (priority rules, AI model, timezone, briefing hour …)
+  settings  Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users          User[]
+  messages       Message[]
+  tasks          Task[]
+  integrations   Integration[]
+  notifications  Notification[]
+  priorityLogs   PriorityHistory[]
+  comments       Comment[]
+  aiLogs         AILog[]
+  auditLogs      AuditLog[]
+  briefings      Briefing[]
+  calendarEvents CalendarEvent[]
+  chatMessages   AssistantMessage[]
+}
+
+model User {
+  id                String    @id @default(cuid())
+  email             String    @unique
+  name              String
+  passwordHash      String?
+  role              Role      @default(ADVISOR)
+  title             String?
+  phone             String?
+  avatarColor       String?
+  isActive          Boolean   @default(true)
+  /// Number of concurrently open tasks considered 100 % workload.
+  capacity          Int       @default(12)
+  teamId            String
+  team              Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  /// Organisational hierarchy (advisors report to the director).
+  managerId         String?
+  manager           User?     @relation("Hierarchy", fields: [managerId], references: [id], onDelete: SetNull)
+  reports           User[]    @relation("Hierarchy")
+  /// Validated by src/lib/settings.ts (channels, quiet hours, thresholds, briefing time)
+  notificationPrefs Json      @default("{}")
+  /// Secret token for the personal ICS calendar feed (Apple Calendar, Outlook, Google).
+  icsToken          String?   @unique
+  lastLoginAt       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  ownedMessages     Message[]          @relation("MessageOwner")
+  assignedMessages  Message[]          @relation("MessageAssignee")
+  createdTasks      Task[]             @relation("TaskCreator")
+  taskAssignments   TaskAssignee[]     @relation("Assignee")
+  assignmentsMade   TaskAssignee[]     @relation("AssignedBy")
+  comments          Comment[]
+  notifications     Notification[]
+  integrations      Integration[]
+  priorityChanges   PriorityHistory[]
+  pushSubscriptions PushSubscription[]
+  briefings         Briefing[]
+  calendarEvents    CalendarEvent[]
+  auditLogs         AuditLog[]
+  aiLogs            AILog[]
+  chatMessages      AssistantMessage[]
+
+  @@index([teamId, role])
+}
+
+// ─── Communication ────────────────────────────────────────────────────────────
+
+model Message {
+  id                  String             @id @default(cuid())
+  teamId              String
+  team                Team               @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  /// Whose inbox / channel received the message.
+  ownerId             String?
+  owner               User?              @relation("MessageOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  /// Team member responsible for handling the message.
+  assigneeId          String?
+  assignee            User?              @relation("MessageAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  integrationId       String?
+  integration         Integration?       @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  channel             Channel
+  direction           MessageDirection   @default(INBOUND)
+  externalId          String?
+  /// Conversation key – provider thread id or `channel:contact`.
+  threadKey           String?
+  senderName          String?
+  senderContact       String
+  recipient           String?
+  subject             String?
+  content             String
+  preview             String             @default("")
+  attachments         Json?
+  receivedAt          DateTime
+  status              MessageStatus      @default(UNREAD)
+  priority            Int                @default(3)
+  basePriority        Int                @default(3)
+  autoEscalate        Boolean            @default(true)
+  starred             Boolean            @default(false)
+  readAt              DateTime?
+  repliedAt           DateTime?
+  resolvedAt          DateTime?
+  lastEscalatedAt     DateTime?
+  // AI analysis (latest run; history lives in AILog)
+  aiStatus            AIProcessingStatus @default(PENDING)
+  aiSummary           String?
+  aiIntent            String?
+  aiTopics            String[]           @default([])
+  aiSentiment         String?
+  aiSuggestedPriority Int?
+  aiPriorityReason    String?
+  aiDeadline          DateTime?
+  aiTasks             Json?
+  aiDeadlines         Json?
+  aiReplies           Json?
+  aiModel             String?
+  aiProcessedAt       DateTime?
+  /// Lower-cased, diacritics-free concatenation used for full-text search.
+  searchText          String             @default("")
+  metadata            Json?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  tasks           Task[]
+  priorityHistory PriorityHistory[]
+  notifications   Notification[]
+  aiLogs          AILog[]
+
+  @@unique([teamId, channel, externalId])
+  @@index([teamId, status, priority])
+  @@index([teamId, receivedAt])
+  @@index([ownerId])
+  @@index([assigneeId])
+  @@index([threadKey])
+  @@index([aiStatus])
+  @@index([searchText(ops: raw("gin_trgm_ops"))], type: Gin)
+}
+
+// ─── Tasks ────────────────────────────────────────────────────────────────────
+
+model Task {
+  id                     String     @id @default(cuid())
+  teamId                 String
+  team                   Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  title                  String
+  description            String?
+  clientName             String?
+  status                 TaskStatus @default(NEW)
+  priority               Int        @default(3)
+  basePriority           Int        @default(3)
+  autoEscalate           Boolean    @default(true)
+  deadline               DateTime?
+  /// "Remind me in X days" – the task resurfaces (P2) once this moment passes.
+  remindAt               DateTime?
+  creatorId              String
+  creator                User       @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: Restrict)
+  sourceMessageId        String?
+  sourceMessage          Message?   @relation(fields: [sourceMessageId], references: [id], onDelete: SetNull)
+  needsDirectorAttention Boolean    @default(false)
+  completedAt            DateTime?
+  lastEscalatedAt        DateTime?
+  overdueNotifiedAt      DateTime?
+  searchText             String     @default("")
+  createdAt              DateTime   @default(now())
+  updatedAt              DateTime   @updatedAt
+
+  assignees       TaskAssignee[]
+  comments        Comment[]
+  priorityHistory PriorityHistory[]
+  notifications   Notification[]
+  calendarEvents  CalendarEvent[]
+  aiLogs          AILog[]
+
+  @@index([teamId, status, priority])
+  @@index([teamId, deadline])
+  @@index([creatorId])
+  @@index([sourceMessageId])
+  @@index([searchText(ops: raw("gin_trgm_ops"))], type: Gin)
+}
+
+model TaskAssignee {
+  taskId       String
+  task         Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User     @relation("Assignee", fields: [userId], references: [id], onDelete: Cascade)
+  assignedById String?
+  assignedBy   User?    @relation("AssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+  assignedAt   DateTime @default(now())
+
+  @@id([taskId, userId])
+  @@index([userId])
+}
+
+model PriorityHistory {
+  id          String               @id @default(cuid())
+  teamId      String
+  team        Team                 @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  taskId      String?
+  task        Task?                @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  messageId   String?
+  message     Message?             @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  oldPriority Int?
+  newPriority Int
+  reason      String
+  source      PriorityChangeSource
+  changedById String?
+  changedBy   User?                @relation(fields: [changedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime             @default(now())
+
+  @@index([taskId, createdAt])
+  @@index([messageId, createdAt])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  teamId    String
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  body      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([taskId, createdAt])
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+model Notification {
+  id            String           @id @default(cuid())
+  teamId        String
+  team          Team             @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type          NotificationType
+  title         String
+  body          String?
+  link          String?
+  priority      Int?
+  taskId        String?
+  task          Task?            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  messageId     String?
+  message       Message?         @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  readAt        DateTime?
+  emailedAt     DateTime?
+  pushedAt      DateTime?
+  /// Set when e-mail/push delivery was postponed by the recipient's quiet hours.
+  deferredUntil DateTime?
+  createdAt     DateTime         @default(now())
+
+  @@index([userId, readAt, createdAt])
+  @@index([deferredUntil])
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ─── Integrations ─────────────────────────────────────────────────────────────
+
+model Integration {
+  id               String            @id @default(cuid())
+  teamId           String
+  team             Team              @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  /// Owner of a personal integration (mailbox). Null for team-wide integrations.
+  userId           String?
+  user             User?             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type             IntegrationType
+  status           IntegrationStatus @default(PENDING)
+  /// Mailbox address / phone number shown in the UI.
+  displayName      String?
+  /// AES-256-GCM encrypted JSON (OAuth tokens, API tokens, webhook secrets).
+  credentials      String?
+  /// Non-secret configuration (scopes, phone number id, sync options).
+  config           Json              @default("{}")
+  /// SHA-256 of the inbound webhook token – used to route webhook calls.
+  webhookTokenHash String?           @unique
+  /// Provider-specific incremental sync cursor (Gmail historyId, Graph deltaLink …).
+  syncCursor       String?
+  lastSyncAt       DateTime?
+  lastError        String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  messages Message[]
+
+  @@index([teamId, type])
+  @@index([userId])
+}
+
+// ─── Calendar ─────────────────────────────────────────────────────────────────
+
+model CalendarEvent {
+  id          String           @id @default(cuid())
+  teamId      String
+  team        Team             @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  location    String?
+  startAt     DateTime
+  endAt       DateTime
+  allDay      Boolean          @default(false)
+  taskId      String?
+  task        Task?            @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  provider    CalendarProvider @default(LOCAL)
+  externalId  String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([userId, startAt])
+  @@index([teamId, startAt])
+}
+
+// ─── AI ───────────────────────────────────────────────────────────────────────
+
+model Briefing {
+  id        String   @id @default(cuid())
+  teamId    String
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Local calendar day (team timezone) the briefing belongs to, as YYYY-MM-DD.
+  day       String
+  content   Json
+  stats     Json
+  model     String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, day])
+}
+
+model AssistantMessage {
+  id        String   @id @default(cuid())
+  teamId    String
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      ChatRole
+  content   String
+  model     String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model AILog {
+  id              String      @id @default(cuid())
+  teamId          String
+  team            Team        @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId          String?
+  user            User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  kind            AIJobKind
+  model           String
+  status          AILogStatus
+  inputTokens     Int         @default(0)
+  outputTokens    Int         @default(0)
+  cacheReadTokens Int         @default(0)
+  costUsd         Float       @default(0)
+  latencyMs       Int         @default(0)
+  messageId       String?
+  message         Message?    @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  taskId          String?
+  task            Task?       @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  error           String?
+  output          Json?
+  createdAt       DateTime    @default(now())
+
+  @@index([teamId, createdAt])
+  @@index([messageId])
+}
+
+// ─── Audit ────────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  teamId     String?
+  team       Team?    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  actorId    String?
+  actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action     String
+  entityType String?
+  entityId   String?
+  metadata   Json?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@index([teamId, createdAt])
+  @@index([actorId])
+}

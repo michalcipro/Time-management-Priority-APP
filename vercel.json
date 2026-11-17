@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    { "path": "/api/cron/priorities.recalculate", "schedule": "*/15 * * * *" },
+    { "path": "/api/cron/channels.sync", "schedule": "*/10 * * * *" },
+    { "path": "/api/cron/briefings.generate", "schedule": "*/15 * * * *" },
+    { "path": "/api/cron/notifications.flush", "schedule": "*/15 * * * *" }
+  ]
+}

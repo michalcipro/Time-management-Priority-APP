@@ -293,6 +293,8 @@ Kompletní a komentovaný seznam je v [`.env.example`](.env.example). Nejdůlež
 | `GOOGLE_*`, `MICROSOFT_*` | – | Gmail/Outlook + kalendáře + SSO |
 | `WHATSAPP_*`, `TWILIO_*` | – | WhatsApp Business a SMS |
 | `DEMO_MODE` | – | Zobrazit demo účty na přihlášení |
+| `CSP_FRAME_ANCESTORS` | – | Povolit vložení do iframe (výchozí: zakázáno), např. `'self' https://intranet.firma.cz` |
+| `AUTH_COOKIE_SAMESITE_NONE` | – | `true` = přihlašovací cookies fungují i v cizím iframe (jen HTTPS) |
 
 ---
 

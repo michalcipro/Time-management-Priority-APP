@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { signOut } from "next-auth/react";
+import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, Eraser, Pencil, ShieldAlert, Trash2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
@@ -215,6 +216,7 @@ export function UsersAdmin() {
 
 export function PrivacyPanel() {
   const user = useSessionUser();
+  const router = useRouter();
   const [contact, setContact] = useState("");
   const [preview, setPreview] = useState<{ messages: number; linkedTasks: number } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -286,7 +288,9 @@ export function PrivacyPanel() {
               try {
                 await api.del("/api/gdpr/account");
                 toast.success("Účet byl smazán");
-                await signOut({ callbackUrl: "/login" });
+                await signOut({ redirect: false });
+                router.replace("/login");
+                router.refresh();
               } catch (err) {
                 toast.error(errorMessage(err));
               }

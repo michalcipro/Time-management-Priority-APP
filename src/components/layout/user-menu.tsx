@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { signOut } from "next-auth/react";
+import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { ChevronsUpDown, LogOut, Monitor, Moon, Settings, Sun, UserRound } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
@@ -19,6 +20,7 @@ import { useSessionUser } from "./session-context";
 
 export function UserMenu() {
   const user = useSessionUser();
+  const router = useRouter();
   const { theme, setTheme } = useTheme();
   return (
     <DropdownMenu>
@@ -63,7 +65,14 @@ export function UserMenu() {
           </DropdownMenuRadioItem>
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => signOut({ callbackUrl: "/login" })} destructive>
+        <DropdownMenuItem
+          onSelect={async () => {
+            await signOut({ redirect: false });
+            router.replace("/login");
+            router.refresh();
+          }}
+          destructive
+        >
           <LogOut /> Odhlásit se
         </DropdownMenuItem>
       </DropdownMenuContent>

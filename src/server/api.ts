@@ -92,10 +92,16 @@ export function errorResponse(err: unknown): Response {
 
 /** Reject cross-site mutation requests (defense in depth on top of SameSite cookies). */
 export function assertSameOrigin(req: NextRequest) {
+  // Modern browsers always send Sec-Fetch-Site; it is reliable even behind reverse
+  // proxies that rewrite the Host header, so it is the primary signal.
   const fetchSite = req.headers.get("sec-fetch-site");
-  if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") {
-    throw new ApiError(403, "Požadavek z cizího původu byl zablokován.", "csrf");
+  if (fetchSite) {
+    if (fetchSite !== "same-origin" && fetchSite !== "none") {
+      throw new ApiError(403, "Požadavek z cizího původu byl zablokován.", "csrf");
+    }
+    return;
   }
+  // Fallback for clients without Fetch Metadata: compare Origin with the host.
   const origin = req.headers.get("origin");
   if (origin) {
     const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");

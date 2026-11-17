@@ -16,7 +16,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
       demo={env.demoMode}
       sso={{ google: features.google, microsoft: features.microsoft }}
       error={params.error ?? null}
-      callbackUrl={params.callbackUrl && params.callbackUrl.startsWith("/") ? params.callbackUrl : null}
+      callbackUrl={params.callbackUrl && /^\/(?![\/\\])/.test(params.callbackUrl) ? params.callbackUrl : null}
     />
   );
 }

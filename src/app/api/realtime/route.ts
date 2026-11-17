@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { getSessionUser } from "@/server/session";
 import { subscribe } from "@/server/realtime";
+import { env } from "@/server/env";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -11,6 +12,9 @@ export const maxDuration = 300;
  * client re-fetches data through the RBAC-protected API.
  */
 export async function GET(req: NextRequest) {
+  // Polling mode (serverless hosting): no long-lived connections. 204 tells
+  // EventSource clients from an older build to stop reconnecting.
+  if (env.realtimeTransport === "poll") return new Response(null, { status: 204 });
   const user = await getSessionUser();
   if (!user) return new Response("Unauthorized", { status: 401 });
 

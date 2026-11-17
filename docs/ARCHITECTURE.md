@@ -58,6 +58,8 @@ flowchart LR
    * Politiky: ředitel vidí celý tým; poradce vidí zprávy ze své schránky, sobě přiřazené a ty, ze kterých vznikl jeho úkol, a úkoly, které vytvořil nebo řeší; administrátor nevidí klientskou komunikaci vůbec.
    * Systémové úlohy používají `withSystem` (`app.bypass_rls = on`).
    * Aplikace se připojuje rolí `priority_app`, která tabulky nevlastní – proto se RLS uplatní (vlastník tabulek RLS obchází). Migrace běží vlastníkem (`DIRECT_URL`).
+   * Na Vercelu + Neonu dostane aplikace URL vlastníka; s `APP_DB_PASSWORD` si z ní odvodí připojení role `priority_app` (`src/lib/db-config.ts`), kterou při buildu založí `scripts/vercel-build.ts`.
+   * Pojistka v `db.ts`: před prvním dotazem procesu ověří, že běhová role není superuser, nemá BYPASSRLS a nevlastní tabulky s RLS. V produkci jinak odmítne pracovat; build stejnou kontrolou neprojde.
    * Rekurzi mezi politikami (Task ⇄ TaskAssignee ⇄ Message) řeší `SECURITY DEFINER` pomocné funkce.
 2. **API** – `apiRoute()` ověří přihlášení (uživatel se při každém požadavku znovu načte z DB → deaktivace a změna role platí okamžitě), oprávnění (`can(role, permission)`), CSRF (Origin/Sec-Fetch-Site), rate limit. Služby navíc aplikují stejné scope jako RLS (`services/scopes.ts`), takže API je korektní i při připojení rolí, která RLS obchází.
 3. **UI** – navigace, akce a stránky se zobrazují podle `can()`; serverové stránky volají `requirePermission()`.
@@ -139,11 +141,11 @@ OAuth `state` je podepsaný HMAC, vázaný na uživatele a nonce v httpOnly cook
 | `briefings.generate` | každých 15 min | ranní briefing ředitelům po nastavené hodině |
 | `notifications.flush` | každých 15 min | doručení upozornění odložených klidovými hodinami |
 
-Režimy: `JOB_RUNNER=queue` (BullMQ + worker, retry s exponenciálním backoffem) nebo výchozí `inline` (v procesu webu) + plánovač v `instrumentation.ts` / Vercel Cron (`vercel.json`, `/api/cron/[job]` chráněné `CRON_SECRET`).
+Režimy: `JOB_RUNNER=queue` (BullMQ + worker, retry s exponenciálním backoffem) nebo výchozí `inline` (v procesu webu) + plánovač v `instrumentation.ts`. Na Vercelu se plánovač nespouští; úlohy volá Vercel Cron (`vercel.json`, na tarifu Hobby denně) a workflow `.github/workflows/cron.yml` (každých 30 min) přes `/api/cron/[job]` chráněné `CRON_SECRET`.
 
 ## Realtime
 
-`publish()` (`server/realtime.ts`) posílá události do Redis kanálu (nebo lokálního EventEmitteru). `/api/realtime` je SSE stream; události nesou jen ID/titulky a filtrují se podle týmu a příjemce. Klient (`hooks/use-realtime.ts`) invaliduje TanStack Query cache a zobrazí toast – data se vždy znovu načtou přes RBAC chráněné API. Při výpadku se EventSource sám připojí znovu (exponenciální backoff) a dotazy mají i periodický refetch.
+`publish()` (`server/realtime.ts`) posílá události do Redis kanálu (nebo lokálního EventEmitteru). `/api/realtime` je SSE stream; události nesou jen ID/titulky a filtrují se podle týmu a příjemce. Klient (`hooks/use-realtime.ts`) invaliduje TanStack Query cache a zobrazí toast – data se vždy znovu načtou přes RBAC chráněné API. Při výpadku se EventSource sám připojí znovu (exponenciální backoff) a dotazy mají i periodický refetch. Na serverless hostingu (`REALTIME_TRANSPORT=poll`, výchozí na Vercelu) se SSE nepoužívá: klient při viditelném panelu obnovuje notifikace každých 30 s a ostatní data každých 60 s a nové nepřečtené notifikace pozná podle ID; `/api/realtime` vrací 204.
 
 ## Bezpečnost
 

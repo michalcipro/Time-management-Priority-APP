@@ -1,12 +1,14 @@
 import "dotenv/config";
 import { defineConfig } from "prisma/config";
+import { resolveDatabaseUrls } from "./src/lib/db-config";
 
 /**
  * Prisma 7 configuration.
  *
  * - `DATABASE_URL` is used by the application at runtime (may be a pooled connection).
- * - `DIRECT_URL` (optional) is used for migrations; set it when DATABASE_URL points
- *   to a transaction pooler (Neon/Supabase pgbouncer) or to a restricted runtime role.
+ * - Migrations use the owner's direct connection: `DIRECT_URL`, or the names the
+ *   Vercel Neon integration sets (`DATABASE_URL_UNPOOLED`, `POSTGRES_URL_NON_POOLING`),
+ *   falling back to `DATABASE_URL`.
  */
 export default defineConfig({
   schema: "prisma/schema.prisma",
@@ -15,6 +17,6 @@ export default defineConfig({
     seed: "tsx prisma/seed.ts",
   },
   datasource: {
-    url: process.env.DIRECT_URL || process.env.DATABASE_URL || "",
+    url: resolveDatabaseUrls(process.env).directUrl ?? "",
   },
 });

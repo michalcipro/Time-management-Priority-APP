@@ -55,7 +55,7 @@ E-maily, WhatsApp, SMS i iMessage na jednom místě. Každá zpráva dostane od 
 
 ## Rychlý start
 
-Požadavky: **Node.js 20.19+ (doporučeno 22)**, **Docker** (nebo vlastní PostgreSQL 16 + Redis 7).
+Požadavky: **Node.js 22**, **Docker** (nebo vlastní PostgreSQL 16 + Redis 7).
 
 ```bash
 git clone <repo> priority-agent && cd priority-agent
@@ -227,11 +227,13 @@ Google a Outlook kalendář se zobrazují v *Kalendáři* a lze do nich vytvář
 | `briefings.generate` | 15 min | ranní briefingy po nastavené hodině |
 | `notifications.flush` | 15 min | doručení upozornění odložených klidovými hodinami |
 
+Intervaly platí pro vestavěný plánovač a worker. Na Vercelu viz níže.
+
 Tři režimy provozu:
 
 * **Výchozí (`JOB_RUNNER` nenastaveno)** – úlohy běží v procesu webu po odeslání odpovědi (`after()`), plánovač startuje v `instrumentation.ts`. Ideální pro jednu instanci (`npm start`, Railway, Docker).
 * **Fronta (`JOB_RUNNER=queue` + `REDIS_URL`)** – BullMQ s retry a backoffem, plány vlastní worker (`npm run worker`). Škálovatelné.
-* **Serverless (Vercel)** – nastavte `INTERNAL_SCHEDULER=false`; plány spouští Vercel Cron (`vercel.json`) na `/api/cron/<job>` s hlavičkou `Authorization: Bearer $CRON_SECRET`.
+* **Serverless (Vercel)** – vestavěný plánovač se na Vercelu automaticky vypne. Úlohy spouští volání `/api/cron/<job>` s hlavičkou `Authorization: Bearer $CRON_SECRET`: Vercel Cron z `vercel.json` (na tarifu Hobby jen jednou denně) a workflow GitHub Actions `.github/workflows/cron.yml` každých 30 minut.
 
 ---
 
@@ -256,11 +258,18 @@ Tři režimy provozu:
 
 ## Nasazení
 
-### Vercel + Neon / Supabase
-1. Vytvořte databázi (PostgreSQL 16+) a jako vlastník spusťte `docker/postgres/01-app-role.sql` (změňte heslo role `priority_app`).
-2. Proměnné: `DATABASE_URL` → role `priority_app` (pooled URL), `DIRECT_URL` → vlastník (direct URL), dále `AUTH_SECRET`, `ENCRYPTION_KEY`, `CRON_SECRET`, `APP_URL`, `INTERNAL_SCHEDULER=false`, volitelně `ANTHROPIC_API_KEY`, `REDIS_URL` (např. Upstash – sdílený rate limit a realtime mezi instancemi), SMTP, VAPID, OAuth.
-3. Build command `npm run build`; migrace `npm run db:deploy` (např. v CI nebo jednorázově).
-4. Cron úlohy definuje `vercel.json` (intervaly kratší než denní vyžadují plán Pro).
+### Vercel + Neon
+
+Podrobný návod krok za krokem (i pro nevývojáře): **[docs/NASAZENI-VERCEL-NEON.md](docs/NASAZENI-VERCEL-NEON.md)**.
+
+* Import repozitáře do Vercelu, proměnné z `npm run deploy:env` (tajné klíče, `APP_DB_PASSWORD`, `DEMO_MODE`, `SEED_DEMO_DATA`) a databáze Neon přes **Storage** (region Frankfurt). Integrace sama nastaví `DATABASE_URL` (pooled) a `DATABASE_URL_UNPOOLED`.
+* `vercel.json` spouští `npm run vercel-build`: [`scripts/vercel-build.ts`](scripts/vercel-build.ts) aplikuje migrace, založí roli `priority_app` s heslem `APP_DB_PASSWORD` a práva k tabulkám, do prázdné databáze nahraje demo data (`SEED_DEMO_DATA=true`) a ověří, že pro běhové připojení platí RLS. Teprve pak běží `next build`. Náhledová nasazení databázi neupravují.
+* Za běhu se aplikace připojuje přes pooler Neonu jako `priority_app` (`DATABASE_URL` + `APP_DB_PASSWORD`). Pokud by běžela pod vlastníkem tabulek, superuserem nebo rolí s BYPASSRLS, v produkci odmítne pracovat (`ALLOW_RLS_BYPASS=true` jen pro nouzi).
+* Funkce běží ve Frankfurtu (`fra1`), `APP_URL` se doplní z domény projektu, realtime používá průběžné načítání (`REALTIME_TRANSPORT=poll`) a vestavěný plánovač je vypnutý.
+* Plánované úlohy: Vercel Cron jednou denně (Hobby) + workflow GitHub Actions každých 30 minut (secrets `APP_URL`, `CRON_SECRET`). Na tarifu Pro lze v `vercel.json` nastavit častější cron.
+
+### Jiný PostgreSQL (Supabase, RDS…)
+Jako vlastník spusťte `docker/postgres/01-app-role.sql` (změňte heslo role `priority_app`) a nastavte `DATABASE_URL` na roli `priority_app` a `DIRECT_URL` na vlastníka. Nebo použijte stejný postup jako u Neonu: `DATABASE_URL` + `DIRECT_URL` vlastníka, `APP_DB_PASSWORD` a build příkazem `npm run vercel-build`.
 
 ### Railway / Render / Docker
 * `docker build -t priority-agent .`
@@ -277,16 +286,22 @@ Kompletní a komentovaný seznam je v [`.env.example`](.env.example). Nejdůlež
 
 | Proměnná | Povinná | Popis |
 |---|:-:|---|
-| `APP_URL` | ✅ | Veřejná URL (OAuth callbacky, odkazy v e-mailech) |
+| `APP_URL` | ✅ (na Vercelu –) | Veřejná URL (OAuth callbacky, odkazy v e-mailech); na Vercelu výchozí doména projektu |
 | `AUTH_SECRET` | ✅ | Tajemství Auth.js |
 | `DATABASE_URL` | ✅ | Runtime připojení (role `priority_app` → RLS) |
-| `DIRECT_URL` | doporučeno | Vlastník DB pro migrace a seed |
+| `DIRECT_URL` | doporučeno | Vlastník DB pro migrace a seed (přijímá i `DATABASE_URL_UNPOOLED`, `POSTGRES_URL_NON_POOLING`) |
+| `APP_DB_PASSWORD` | Vercel ✅ | Heslo běhové role; aplikace se pak připojuje jako `APP_DB_USER` (výchozí `priority_app`) přes host z `DATABASE_URL` |
+| `SEED_DEMO_DATA` | – | `true` = `npm run vercel-build` nahraje demo data do prázdné databáze |
+| `DB_SETUP` | – | `auto` (výchozí, bez preview) / `always` / `never` – příprava DB při buildu |
+| `REALTIME_TRANSPORT` | – | `sse` / `poll` (výchozí na Vercelu `poll`, jinde `sse`) |
+| `DATABASE_POOL_SIZE` | – | Spojení na instanci (výchozí 10, na Vercelu 5) |
+| `ALLOW_RLS_BYPASS` | – | Nouzově povolit běh, i když DB nevynucuje RLS pro roli aplikace |
 | `ENCRYPTION_KEY` | ✅ | 32 B (base64) pro šifrování integrací |
 | `ANTHROPIC_API_KEY` | – | Claude API (bez něj offline AI) |
 | `AI_DEFAULT_MODEL` | – | `claude-haiku-5-5` / `claude-sonnet-5-5` / `claude-opus-5-5` |
 | `REDIS_URL` | – | Fronty, sdílený rate limit, realtime mezi instancemi |
 | `JOB_RUNNER` | – | `queue` = BullMQ worker, jinak in-process |
-| `INTERNAL_SCHEDULER` | – | `false` na serverless (použijte cron) |
+| `INTERNAL_SCHEDULER` | – | `false` vypne vestavěný plánovač (na Vercelu je vypnutý vždy) |
 | `CRON_SECRET` | ✅ pro cron | Ochrana `/api/cron/*` |
 | `SMTP_*` | – | Odesílání e-mailových notifikací |
 | `NEXT_PUBLIC_VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | – | Web push |

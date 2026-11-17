@@ -1,7 +1,7 @@
 import { AppShell } from "@/components/layout/app-shell";
 import { requireUser } from "@/server/session";
 import { prisma } from "@/server/db";
-import { features } from "@/server/env";
+import { env, features } from "@/server/env";
 import { parseTeamSettings } from "@/lib/settings";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -10,6 +10,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const settings = parseTeamSettings(team?.settings);
   return (
     <AppShell
+      realtime={env.realtimeTransport}
       user={{
         id: user.id,
         name: user.name,

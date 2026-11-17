@@ -1,0 +1,47 @@
+# Scheduled background jobs for serverless hosting (Vercel Hobby allows only daily
+# Vercel Cron jobs). Every 30 minutes this calls the app's /api/cron/<job> endpoints.
+#
+# Setup (GitHub → Settings → Secrets and variables → Actions):
+#   secret   CRON_SECRET – same value as in the Vercel project
+#   secret or variable APP_URL – e.g. https://priority-agent.vercel.app
+# Without them the workflow only prints a notice. Private repositories spend about
+# 1,440 Actions minutes per month at this cadence (public repositories: free).
+name: Scheduled jobs
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: scheduled-jobs
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Call job endpoints
+        env:
+          APP_URL: ${{ secrets.APP_URL || vars.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "::notice::APP_URL or CRON_SECRET is not configured – nothing to do (see docs/NASAZENI-VERCEL-NEON.md)."
+            exit 0
+          fi
+          base="${APP_URL%/}"
+          status=0
+          for job in priorities.recalculate notifications.flush briefings.generate channels.sync; do
+            code=$(curl -sS -o response.json -w "%{http_code}" -X POST \
+              -H "Authorization: Bearer $CRON_SECRET" --max-time 290 "$base/api/cron/$job" || echo "000")
+            echo "$job → HTTP $code $(head -c 300 response.json 2>/dev/null)"
+            if [ "$code" != "200" ]; then
+              echo "::warning::$job failed with HTTP $code"
+              status=1
+            fi
+          done
+          exit $status

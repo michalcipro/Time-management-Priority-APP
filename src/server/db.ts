@@ -2,6 +2,7 @@ import "server-only";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import type { Role } from "@/generated/prisma/enums";
+import { evaluateRlsCheck, resolveDatabaseUrls, RLS_CHECK_SQL, type RlsCheckRow } from "@/lib/db-config";
 
 /**
  * Database access.
@@ -16,9 +17,12 @@ import type { Role } from "@/generated/prisma/enums";
 const globalForPrisma = globalThis as unknown as { __prisma?: PrismaClient };
 
 function createClient(): PrismaClient {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) throw new Error("DATABASE_URL is not set");
-  const adapter = new PrismaPg({ connectionString, max: Number(process.env.DATABASE_POOL_SIZE ?? 10) });
+  // DATABASE_URL, or DATABASE_URL with the runtime role's credentials when APP_DB_PASSWORD is set.
+  const { runtimeUrl } = resolveDatabaseUrls(process.env);
+  if (!runtimeUrl) throw new Error("DATABASE_URL is not set");
+  // Serverless instances each hold their own pool; keep it small behind the Neon pooler.
+  const max = Number(process.env.DATABASE_POOL_SIZE ?? (process.env.VERCEL ? 5 : 10));
+  const adapter = new PrismaPg({ connectionString: runtimeUrl, max });
   return new PrismaClient({
     adapter,
     log: process.env.PRISMA_LOG_QUERIES === "true" ? ["query", "warn", "error"] : ["warn", "error"],
@@ -54,8 +58,46 @@ export interface Actor {
 
 const TX_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const;
 
+/**
+ * The RBAC model relies on PostgreSQL enforcing Row-Level Security for the runtime
+ * role. Verify that once per process before the first business query: in
+ * production a misconfigured connection (superuser, BYPASSRLS or table owner)
+ * fails closed unless ALLOW_RLS_BYPASS=true; in development it only warns.
+ */
+const rlsState = globalThis as unknown as { __rlsVerified?: boolean; __rlsCheck?: Promise<void> | null };
+
+async function verifyRls(): Promise<void> {
+  const rows = await prisma.$queryRawUnsafe<RlsCheckRow[]>(RLS_CHECK_SQL);
+  const result = evaluateRlsCheck(rows[0]);
+  if (result.ok) {
+    rlsState.__rlsVerified = true;
+    return;
+  }
+  const message =
+    `Row-Level Security is not enforced for database role "${result.user}": ${result.problems.join("; ")}. ` +
+    "Point DATABASE_URL at the runtime role or set APP_DB_PASSWORD (see docs/NASAZENI-VERCEL-NEON.md).";
+  if (process.env.ALLOW_RLS_BYPASS === "true") {
+    console.warn(`[db] ${message} Continuing because ALLOW_RLS_BYPASS=true.`);
+    rlsState.__rlsVerified = true;
+    return;
+  }
+  if (process.env.NODE_ENV === "production") throw new Error(message);
+  console.warn(`[db] ${message}`);
+  rlsState.__rlsVerified = true;
+}
+
+function ensureRlsEnforced(): Promise<void> {
+  if (rlsState.__rlsVerified) return Promise.resolve();
+  // A failed check is not cached: the next request checks again.
+  rlsState.__rlsCheck ??= verifyRls().finally(() => {
+    rlsState.__rlsCheck = null;
+  });
+  return rlsState.__rlsCheck;
+}
+
 /** Run `fn` with the database scoped to `actor` (RLS enforced). */
-export function withActor<T>(actor: Pick<Actor, "id" | "teamId" | "role">, fn: (db: Db) => Promise<T>): Promise<T> {
+export async function withActor<T>(actor: Pick<Actor, "id" | "teamId" | "role">, fn: (db: Db) => Promise<T>): Promise<T> {
+  await ensureRlsEnforced();
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT
       set_config('app.user_id', ${actor.id}, true),
@@ -66,7 +108,8 @@ export function withActor<T>(actor: Pick<Actor, "id" | "teamId" | "role">, fn: (
 }
 
 /** Run `fn` as the trusted system (RLS bypassed). Use only for jobs and webhooks. */
-export function withSystem<T>(fn: (db: Db) => Promise<T>): Promise<T> {
+export async function withSystem<T>(fn: (db: Db) => Promise<T>): Promise<T> {
+  await ensureRlsEnforced();
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
     return fn(tx);

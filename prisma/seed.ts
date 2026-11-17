@@ -24,12 +24,13 @@ import {
   type PriorityLevel,
 } from "../src/lib/priority";
 import { buildSearchText } from "../src/lib/search-text";
+import { resolveDatabaseUrls } from "../src/lib/db-config";
 import { dayKey, fromLocalDateTime, addDays } from "../src/lib/format";
 import { makePreview } from "../src/lib/utils";
 import type { AIReplySuggestion, AITaskSuggestion, BriefingContent, BriefingStats } from "../src/lib/ai-types";
 
-const connectionString = process.env.DIRECT_URL || process.env.DATABASE_URL;
-if (!connectionString) throw new Error("DIRECT_URL or DATABASE_URL must be set");
+const connectionString = resolveDatabaseUrls(process.env).directUrl;
+if (!connectionString) throw new Error("DIRECT_URL (or DATABASE_URL_UNPOOLED / DATABASE_URL) must be set");
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
 
 const NOW = new Date();

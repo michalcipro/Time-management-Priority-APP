@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import { Menu, Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { useRealtime } from "@/hooks/use-realtime";
+import { useRealtime, type RealtimeTransport } from "@/hooks/use-realtime";
 import { can } from "@/lib/permissions";
 import { Sidebar, SidebarContent } from "./sidebar";
 import { NotificationsBell } from "./notifications-bell";
@@ -61,9 +61,9 @@ function TopBar({ onMenu }: { onMenu: () => void }) {
   );
 }
 
-function ShellInner({ children }: { children: React.ReactNode }) {
+function ShellInner({ realtime, children }: { realtime: RealtimeTransport; children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
-  useRealtime(true);
+  useRealtime(realtime);
   return (
     <div className="min-h-dvh">
       <Sidebar />
@@ -82,11 +82,11 @@ function ShellInner({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function AppShell({ user, children }: { user: ClientUser; children: React.ReactNode }) {
+export function AppShell({ user, realtime, children }: { user: ClientUser; realtime: RealtimeTransport; children: React.ReactNode }) {
   return (
     <SessionProvider user={user}>
       <AppUIProvider>
-        <ShellInner>{children}</ShellInner>
+        <ShellInner realtime={realtime}>{children}</ShellInner>
       </AppUIProvider>
     </SessionProvider>
   );

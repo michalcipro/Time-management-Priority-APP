@@ -9,17 +9,41 @@ function read(name: string): string | undefined {
   return v === undefined || v.trim() === "" ? undefined : v.trim();
 }
 
+/**
+ * Public URL of the app: APP_URL, else the Vercel production domain, else the
+ * deployment URL (preview), else localhost.
+ */
+function resolveAppUrl(): string {
+  const explicit = read("APP_URL");
+  if (explicit) return explicit.replace(/\/$/, "");
+  const vercelHost = read("VERCEL_PROJECT_PRODUCTION_URL") ?? read("VERCEL_URL");
+  if (vercelHost) return `https://${vercelHost.replace(/^https?:\/\//, "").replace(/\/$/, "")}`;
+  return "http://localhost:3000";
+}
+
+/**
+ * Realtime transport: server-sent events (long-lived connection, needs Redis
+ * between instances) or polling (serverless hosting such as Vercel).
+ */
+export type RealtimeTransport = "sse" | "poll";
+
+function resolveRealtimeTransport(): RealtimeTransport {
+  const value = read("REALTIME_TRANSPORT")?.toLowerCase();
+  if (value === "sse" || value === "poll") return value;
+  return process.env.VERCEL ? "poll" : "sse";
+}
+
 export const env = {
-  appUrl: (read("APP_URL") ?? "http://localhost:3000").replace(/\/$/, ""),
+  appUrl: resolveAppUrl(),
   nodeEnv: process.env.NODE_ENV ?? "development",
   isProduction: process.env.NODE_ENV === "production",
   demoMode: read("DEMO_MODE") === "true",
   timezone: read("NEXT_PUBLIC_APP_TIMEZONE") ?? "Europe/Prague",
 
-  databaseUrl: read("DATABASE_URL"),
   encryptionKey: read("ENCRYPTION_KEY"),
   redisUrl: read("REDIS_URL"),
   cronSecret: read("CRON_SECRET"),
+  realtimeTransport: resolveRealtimeTransport(),
 
   anthropicApiKey: read("ANTHROPIC_API_KEY") ?? read("ANTHROPIC_AUTH_TOKEN"),
   aiDefaultModel: read("AI_DEFAULT_MODEL") ?? "claude-haiku-5-5",

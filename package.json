@@ -5,11 +5,12 @@
   "description": "Priority Agent – unified inbox, dynamic prioritization and team task management with an AI assistant for financial advisory firms.",
   "license": "UNLICENSED",
   "engines": {
-    "node": ">=20.19"
+    "node": "22.x"
   },
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
+    "vercel-build": "tsx scripts/vercel-build.ts && npm run build",
     "start": "next start",
     "worker": "tsx --conditions=react-server src/worker/index.ts",
     "lint": "eslint .",
@@ -24,6 +25,7 @@
     "db:studio": "prisma studio",
     "setup": "npm run db:deploy && npm run db:seed",
     "vapid": "tsx scripts/generate-keys.ts",
+    "deploy:env": "tsx scripts/generate-keys.ts --vercel",
     "postinstall": "prisma generate"
   },
   "dependencies": {
